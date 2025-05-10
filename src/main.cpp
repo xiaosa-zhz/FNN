@@ -146,17 +146,15 @@ int main(int argc, char** argv) {
     std::span<double> ted(test_data.ptr.get(), test_data.size);
     std::span<std::uint8_t> tel(test_label.ptr.get(), test_label.size);
 
-    mylib::default_network<picture_size, 10> network(mylib::uninitialize);
-
     // std::ifstream ifile("network.bin", std::ios::binary | std::ios::in);
-    // network.load(ifile);
+    // mylib::default_deployment_network<picture_size, 10> d_network(ifile);
     // std::println("Train set:");
-    // network.evaluate_batch(trd, trl);
+    // d_network.evaluate_batch(trd, trl);
     // std::println("Test set:");
-    // network.evaluate_batch(ted, tel);
+    // d_network.evaluate_batch(ted, tel);
     // return 0;
 
-    network.init();
+    mylib::default_network<picture_size, 10> network;
     std::random_device rd{};
     std::mt19937 gen(rd());
     auto helper = to_helper(trd);

@@ -94,16 +94,25 @@ namespace mylib {
         && mylib::activation<typename Config::activation_function_type>;
 
     template<typename Layer>
-    using requirement_t = typename Layer::requirement_type;
+    using parameter_t = typename Layer::parameter_type;
 
     template<typename Layer>
-    using parameter_t = typename Layer::parameter_type;
+    using requirement_t = typename Layer::requirement_type;
 
     template<typename Layer>
     using requirement_storage_t = typename Layer::requirement_storage_type;
 
     template<typename Layer>
+    using deployment_only_requirement_t = typename Layer::deployment_only_requirement_type;
+
+    template<typename Layer>
+    using deployment_only_requirement_storage_t = typename Layer::deployment_only_requirement_storage_type;
+
+    template<typename Layer>
     using delegate_t = typename Layer::application_delegate;
+
+    template<typename Layer>
+    using deployment_delegate_t = typename Layer::deployment_delegate;
 
     template<layer_config Config>
     class fixed_layer : protected Config::activation_function_type
@@ -137,6 +146,8 @@ namespace mylib {
         using parameter_type = std::tuple<weights_buffer_type, biases_buffer_type>;
         using requirement_type = std::tuple<weights_buffer_type, biases_buffer_type, mid_result_buffer_type>;
         using requirement_storage_type = std::tuple<weights_storage_type, biases_storage_type, mid_result_storage_type>;
+        using deployment_only_requirement_type = std::tuple<mid_result_buffer_type>;
+        using deployment_only_requirement_storage_type = std::tuple<mid_result_storage_type>;
 
         fixed_layer() = default;
 
@@ -183,8 +194,6 @@ namespace mylib {
         class application_delegate
         {
         public:
-            using buffer_type = std::tuple<weights_storage_type, biases_storage_type>;
-
             application_delegate() = delete;
             application_delegate(const application_delegate&) = default;
             application_delegate& operator=(const application_delegate&) = default;
@@ -259,6 +268,43 @@ namespace mylib {
 
         application_delegate delegate(requirement_type buffers) noexcept {
             return application_delegate(this, buffers);
+        }
+
+        class deployment_delegate
+        {
+        public:
+            deployment_delegate() = delete;
+            deployment_delegate(const deployment_delegate&) = default;
+            deployment_delegate& operator=(const deployment_delegate&) = default;
+
+            void forward(/* out */ output_type output, const_input_type input) const noexcept {
+                fixed_layer& layer = *(this->layer);
+                weights_type weights = layer.weights();
+                biases_type biases = layer.biases();
+                // trivial implementation
+                // TODO: use SIMD or other optimizations
+                for (std::size_t i = 0; i < output_size; ++i) {
+                    data_type& sum = this->mid_result[i];
+                    sum = biases[i];
+                    for (std::size_t j = 0; j < input_size; ++j) {
+                        sum += weights[i, j] * input[j];
+                    }
+                    output[i] = layer.activation_function().activate(sum);
+                }
+            }
+
+        private:
+            friend fixed_layer;
+            explicit deployment_delegate(fixed_layer* self, deployment_only_requirement_type buffers) noexcept
+                : mid_result(std::get<0>(buffers)), layer(self)
+            {}
+
+            mid_result_buffer_type mid_result;
+            fixed_layer* layer;
+        };
+
+        deployment_delegate delegate(deployment_only_requirement_type buffers) noexcept {
+            return deployment_delegate(this, buffers);
         }
 
     private:
@@ -362,10 +408,18 @@ namespace mylib {
         using train_buffer_type = train_type;
         using self_requirement_type = std::tuple<train_buffer_type, train_buffer_type>; // One for activation, one for gradient
         using self_requirement_storage_type = std::tuple<train_storage_type, train_storage_type>;
+        using self_deployment_only_requirement_type = std::tuple<train_buffer_type>;
+        using self_deployment_only_requirement_storage_type = std::tuple<train_storage_type>;
         using prev_layer_requirement_type = requirement_t<prev_layer_type>;
         using next_layer_requirement_type = requirement_t<next_layer_type>;
+        using prev_layer_deployment_only_requirement_type = deployment_only_requirement_t<prev_layer_type>;
+        using next_layer_deployment_only_requirement_type = deployment_only_requirement_t<next_layer_type>;
         using prev_layer_parameter_type = parameter_t<prev_layer_type>;
         using next_layer_parameter_type = parameter_t<next_layer_type>;
+        using prev_layer_delegate_type = delegate_t<prev_layer_type>;
+        using next_layer_delegate_type = delegate_t<next_layer_type>;
+        using prev_layer_deployment_delegate_type = deployment_delegate_t<prev_layer_type>;
+        using next_layer_deployment_delegate_type = deployment_delegate_t<next_layer_type>;
         constexpr static std::size_t prev_layer_parameter_size = std::tuple_size_v<prev_layer_parameter_type>;
         constexpr static std::size_t next_layer_parameter_size = std::tuple_size_v<next_layer_parameter_type>;
         using parameter_type = decltype(std::tuple_cat(
@@ -381,6 +435,16 @@ namespace mylib {
             std::declval<self_requirement_storage_type>(),
             std::declval<requirement_storage_t<prev_layer_type>>(),
             std::declval<requirement_storage_t<next_layer_type>>()
+        ));
+        using deployment_only_requirement_type = decltype(std::tuple_cat(
+            std::declval<self_deployment_only_requirement_type>(),
+            std::declval<prev_layer_deployment_only_requirement_type>(),
+            std::declval<next_layer_deployment_only_requirement_type>()
+        ));
+        using deployment_only_requirement_storage_type = decltype(std::tuple_cat(
+            std::declval<self_deployment_only_requirement_storage_type>(),
+            std::declval<deployment_only_requirement_storage_t<prev_layer_type>>(),
+            std::declval<deployment_only_requirement_storage_t<next_layer_type>>()
         ));
 
         chained_layer() = default;
@@ -404,15 +468,15 @@ namespace mylib {
             this->next_layer().store(next_params);
         }
 
+        template<typename Gen>
+        void init(Gen& gen) noexcept {
+            this->prev_layer().init(gen);
+            this->next_layer().init(gen);
+        }
+
         class application_delegate
         {
         public:
-            using buffer_type = std::tuple<train_storage_type, train_storage_type>; // Same as requirement_type
-            using prev_layer_delegate_type = delegate_t<prev_layer_type>;
-            using next_layer_delegate_type = delegate_t<next_layer_type>;
-            constexpr static std::size_t prev_layer_requirement_size = std::tuple_size_v<prev_layer_requirement_type>;
-            constexpr static std::size_t next_layer_requirement_size = std::tuple_size_v<next_layer_requirement_type>;
-
             application_delegate() = delete;
             application_delegate(const application_delegate&) = default;
             application_delegate& operator=(const application_delegate&) = default;
@@ -441,6 +505,8 @@ namespace mylib {
             }
 
         private:
+            constexpr static std::size_t prev_layer_requirement_size = std::tuple_size_v<prev_layer_requirement_type>;
+            constexpr static std::size_t next_layer_requirement_size = std::tuple_size_v<next_layer_requirement_type>;
             friend chained_layer;
             explicit application_delegate(chained_layer* self, requirement_type buffers) noexcept :
                 layer(self), mid_gradient(std::get<0>(buffers)), activation(std::get<1>(buffers)),
@@ -455,14 +521,40 @@ namespace mylib {
             next_layer_delegate_type next_layer_delegate;
         };
 
-        template<typename Gen>
-        void init(Gen& gen) noexcept {
-            this->prev_layer().init(gen);
-            this->next_layer().init(gen);
-        }
-
         application_delegate delegate(requirement_type buffers) noexcept {
             return application_delegate(this, buffers);
+        }
+
+        class deployment_delegate
+        {
+        public:
+            deployment_delegate() = delete;
+            deployment_delegate(const deployment_delegate&) = default;
+            deployment_delegate& operator=(const deployment_delegate&) = default;
+
+            void forward(/* out */ output_type output, const_input_type input) const noexcept {
+                this->prev_layer_delegate.forward(this->activation, input);
+                this->next_layer_delegate.forward(output, this->activation);
+            }
+
+        private:
+            constexpr static std::size_t prev_layer_requirement_size = std::tuple_size_v<prev_layer_deployment_only_requirement_type>;
+            constexpr static std::size_t next_layer_requirement_size = std::tuple_size_v<next_layer_deployment_only_requirement_type>;
+            friend chained_layer;
+            explicit deployment_delegate(chained_layer* self, deployment_only_requirement_type buffers) noexcept :
+                layer(self), activation(std::get<0>(buffers)),
+                prev_layer_delegate(layer->prev_layer().delegate(details::sub_tuple<1, prev_layer_requirement_size>(buffers))),
+                next_layer_delegate(layer->next_layer().delegate(details::sub_tuple<1 + prev_layer_requirement_size, next_layer_requirement_size>(buffers)))
+            {}
+
+            chained_layer* layer;
+            train_type activation;
+            prev_layer_deployment_delegate_type prev_layer_delegate;
+            next_layer_deployment_delegate_type next_layer_delegate;
+        };
+
+        deployment_delegate delegate(deployment_only_requirement_type buffers) noexcept {
+            return deployment_delegate(this, buffers);
         }
 
     private:
@@ -567,6 +659,8 @@ namespace mylib {
         using parameter_type = std::tuple<>;
         using requirement_type = std::tuple<buffer_type>;
         using requirement_storage_type = std::tuple<storage_type>;
+        using deployment_only_requirement_type = requirement_type;
+        using deployment_only_requirement_storage_type = requirement_storage_type;
 
         template<typename Gen>
         constexpr void init(Gen& gen) const noexcept { /* noop */ }
@@ -617,8 +711,60 @@ namespace mylib {
             buffer_type buffer;
         };
 
+        using deployment_delegate = application_delegate;
+
         application_delegate delegate(requirement_type buffers) noexcept {
             return application_delegate(this, buffers);
+        }
+    };
+
+    namespace details {
+
+        template<typename Layer>
+        struct serialization_buffer_util
+        {
+            using layer_type = Layer;
+            using parameter_type = parameter_t<layer_type>;
+            using data_type = typename layer_type::data_type;
+            constexpr static std::size_t serialization_buffer_size = details::serialization_buffer_size_impl<parameter_type>::value;
+            using serialization_buffer_type = std::array<data_type, serialization_buffer_size>;
+
+            static std::unique_ptr<serialization_buffer_type> get_buffer() {
+                return std::make_unique<serialization_buffer_type>();
+            }
+    
+            static parameter_type buffer_to_parameter(serialization_buffer_type& buffer) noexcept {
+                return [&buffer]<std::size_t... Is>(std::index_sequence<Is...>) noexcept {
+                    constexpr auto offset = details::serialization_buffer_offset_impl<parameter_type>::value;
+                    return parameter_type{
+                        std::tuple_element_t<Is, parameter_type>(&buffer[offset[Is]], std::tuple_element_t<Is, parameter_type>::extent)...
+                    };
+                }(std::make_index_sequence<std::tuple_size_v<parameter_type>>{});
+            }
+        };
+
+    } // namespace mylib::details
+
+    template<typename Layer, typename LabelType>
+    struct cross_entropy_loss
+    {
+        using data_type = typename Layer::data_type;
+        using const_output_type = typename Layer::const_output_type;
+        using output_type = typename Layer::output_type;
+        using label_type = LabelType;
+
+        static data_type loss(const_output_type predict, label_type expect) noexcept {
+            // cross entropy loss
+            return -std::log(predict[expect]);
+        }
+
+        static void loss_derivative(/* out */ output_type gradient,
+            const_output_type predict, label_type expect) noexcept {
+            // cross entropy loss derivative
+            // dL/dy = -1 / y_i, where i = expect
+            // dL/dy_i = 0, where i != expect
+            std::ranges::fill(gradient, 0);
+            gradient[expect] = -1 / predict[expect];
         }
     };
 
@@ -674,10 +820,9 @@ namespace mylib {
         };
 
     public:
-        template<std::size_t SOFTMAX_SIZE>
-        using softmax_layer_type = softmax_layer<SOFTMAX_SIZE, data_type>;
+        using softmax_layer_type = softmax_layer<output_size, data_type>;
         using input_layer_type = fixed_layer<input_layer_config>;
-        using output_layer_type = connect_t<fixed_layer<output_layer_config>, softmax_layer_type<output_size>>;
+        using output_layer_type = connect_t<fixed_layer<output_layer_config>, softmax_layer_type>;
         using hidden_layer_type = repeat_layers_t<hidden_count, fixed_layer<hidden_layer_config>>;
         using layer_type = connect_t<input_layer_type, hidden_layer_type, output_layer_type>;
 
@@ -686,35 +831,8 @@ namespace mylib {
         using requirement_type = requirement_t<layer_type>;
         using parameter_type = parameter_t<layer_type>;
         using delegate_type = delegate_t<layer_type>;
-        constexpr static std::size_t serialization_buffer_size = details::serialization_buffer_size_impl<parameter_type>::value;
-        using serialization_buffer_type = std::array<data_type, serialization_buffer_size>;
-
-        static std::unique_ptr<serialization_buffer_type> get_buffer() {
-            return std::make_unique<serialization_buffer_type>();
-        }
-
-        static parameter_type buffer_to_parameter(serialization_buffer_type& buffer) noexcept {
-            return [&buffer]<std::size_t... Is>(std::index_sequence<Is...>) noexcept {
-                constexpr auto offset = details::serialization_buffer_offset_impl<parameter_type>::value;
-                return parameter_type{
-                    std::tuple_element_t<Is, parameter_type>(&buffer[offset[Is]], std::tuple_element_t<Is, parameter_type>::extent)...
-                };
-            }(std::make_index_sequence<std::tuple_size_v<parameter_type>>{});
-        }
-
-        static data_type loss(const_output_type predict, label_type expect) noexcept {
-            // cross entropy loss
-            return -std::log(predict[expect]);
-        }
-
-        static void loss_derivative(/* out */ output_type gradient,
-            const_output_type predict, label_type expect) noexcept {
-            // cross entropy loss derivative
-            // dL/dy = -1 / y_i, where i = expect
-            // dL/dy_i = 0, where i != expect
-            std::ranges::fill(gradient, 0);
-            gradient[expect] = -1 / predict[expect];
-        }
+        using loss_type = cross_entropy_loss<output_layer_type, label_type>;
+        using serialization_buffer_util = details::serialization_buffer_util<layer_type>;
 
         static void check_fit_batch(std::span<data_type> data, std::span<label_type> label) noexcept(false) {
             if (data.size() != label.size() * input_size) {
@@ -762,9 +880,9 @@ namespace mylib {
                 auto&& [data, label, delegate, loss_result] = zip_ref;
                 std::array<data_type, output_size> output = {};
                 delegate.forward(output, data);
-                loss_result = loss(output, label);
+                loss_result = loss_type::loss(output, label);
                 std::array<data_type, output_size> gradient = {};
-                loss_derivative(gradient, output, label);
+                loss_type::loss_derivative(gradient, output, label);
                 delegate.backward(discard, data, output, gradient);
             };
             std::for_each(
@@ -819,7 +937,7 @@ namespace mylib {
             std::array<data_type, output_size> output = {};
             this->core_delegate->forward(output, data);
             auto i = std::ranges::max_element(output);
-            return { (i - output.begin()) == label, loss(output, label) };
+            return { (i - output.begin()) == label, loss_type::loss(output, label) };
         }
 
         data_type evaluate_batch(std::span<data_type> data, std::span<label_type> label) const {
@@ -842,8 +960,8 @@ namespace mylib {
         }
 
         std::ostream& store(std::ostream& os) {
-            auto buffer = get_buffer();
-            this->parameter_layer->store(buffer_to_parameter(*buffer));
+            auto buffer = serialization_buffer_util::get_buffer();
+            this->parameter_layer->store(serialization_buffer_util::buffer_to_parameter(*buffer));
             for (data_type p : *buffer) {
                 auto temp = std::bit_cast<std::array<char, sizeof(data_type)>>(p);
                 os.write(temp.data(), temp.size());
@@ -852,13 +970,13 @@ namespace mylib {
         }
 
         std::istream& load(std::istream& is) {
-            auto buffer = get_buffer();
+            auto buffer = serialization_buffer_util::get_buffer();
             for (data_type& p : *buffer) {
                 std::array<char, sizeof(data_type)> temp = {};
                 is.read(temp.data(), temp.size());
                 p = std::bit_cast<data_type>(temp);
             }
-            this->parameter_layer->load(buffer_to_parameter(*buffer));
+            this->parameter_layer->load(serialization_buffer_util::buffer_to_parameter(*buffer));
             return is;
         }
 
@@ -897,7 +1015,147 @@ namespace mylib {
         requires (INPUT_SIZE >= 16) && (16 >= OUTPUT_SIZE)
     using default_network = neural_network<INPUT_SIZE, OUTPUT_SIZE, 16, 2, 10>;
 
-    // TODO: add deployment only network type
+    template<std::size_t INPUT_SIZE, std::size_t OUTPUT_SIZE,
+        std::size_t HIDDEN_SIZE, std::size_t HIDDEN_COUNT,
+        std::floating_point DataType = double,
+        mylib::activation ActivationFunc = leaky_ReLU<DataType>
+    >
+        requires (INPUT_SIZE >= HIDDEN_SIZE) && (HIDDEN_SIZE >= OUTPUT_SIZE) && (HIDDEN_COUNT >= 2)
+    class deployment_network
+    {
+    public:
+        using data_type = DataType;
+        using activation_funcion_type = ActivationFunc;
+        constexpr static std::size_t input_size = INPUT_SIZE;
+        constexpr static std::size_t output_size = OUTPUT_SIZE;
+        constexpr static std::size_t hidden_size = HIDDEN_SIZE;
+        constexpr static std::size_t hidden_count = HIDDEN_COUNT;
+        using input_type = std::span<data_type, input_size>;
+        using const_input_type = std::span<const data_type, input_size>;
+        using output_type = std::span<data_type, output_size>;
+        using const_output_type = std::span<const data_type, output_size>;
+        using post_treatment_buffer_type = std::array<data_type, output_size>;
+        using label_type = std::uint8_t;
+
+    private:
+        struct input_layer_config {
+            using data_type = typename deployment_network::data_type;
+            using activation_function_type = typename deployment_network::activation_funcion_type;
+            constexpr static std::size_t input_size = deployment_network::input_size;
+            constexpr static std::size_t output_size = deployment_network::hidden_size;
+        };
+
+        struct output_layer_config {
+            using data_type = typename deployment_network::data_type;
+            using activation_function_type = typename deployment_network::activation_funcion_type;
+            constexpr static std::size_t input_size = deployment_network::hidden_size;
+            constexpr static std::size_t output_size = deployment_network::output_size;
+        };
+
+        struct hidden_layer_config {
+            using data_type = typename deployment_network::data_type;
+            using activation_function_type = typename deployment_network::activation_funcion_type;
+            constexpr static std::size_t input_size = deployment_network::hidden_size;
+            constexpr static std::size_t output_size = deployment_network::hidden_size;
+        };
+
+    public:
+        using softmax_layer_type = softmax_layer<output_size, data_type>;
+        using input_layer_type = fixed_layer<input_layer_config>;
+        using output_layer_type = connect_t<fixed_layer<output_layer_config>, softmax_layer_type>;
+        using hidden_layer_type = repeat_layers_t<hidden_count, fixed_layer<hidden_layer_config>>;
+        using layer_type = connect_t<input_layer_type, hidden_layer_type, output_layer_type>;
+
+    private:
+        using storage_type = deployment_only_requirement_storage_t<layer_type>;
+        using requirement_type = deployment_only_requirement_t<layer_type>;
+        using parameter_type = parameter_t<layer_type>;
+        using delegate_type = deployment_delegate_t<layer_type>;
+        using loss_type = cross_entropy_loss<output_layer_type, label_type>;
+        using serialization_buffer_util = details::serialization_buffer_util<layer_type>;
+
+        static void check_evaluate_batch(std::span<data_type> data, std::span<label_type> label) noexcept(false) {
+            if (data.size() != label.size() * input_size) {
+                throw std::invalid_argument("Data and label size mismatch.");
+            }
+        }
+
+    public:
+        deployment_network() = delete;
+        explicit deployment_network(std::istream& is)
+            : deployment_network(mylib::uninitialize) {
+            this->load(is);
+        }
+        explicit deployment_network(uninitialize_tag_t) {}
+
+        struct evaluate_result {
+            bool match;
+            data_type loss_value;
+        };
+        
+        evaluate_result evaluate(const_input_type data, label_type label) const noexcept {
+            std::array<data_type, output_size> output = {};
+            this->core_delegate->forward(output, data);
+            auto i = std::ranges::max_element(output);
+            return { (i - output.begin()) == label, loss_type::loss(output, label) };
+        }
+
+        data_type evaluate_batch(std::span<data_type> data, std::span<label_type> label) const {
+            check_evaluate_batch(data, label);
+            const std::size_t total = label.size();
+            std::size_t correct = 0;
+            std::size_t wrong = 0;
+            data_type total_loss = 0;
+            for (std::size_t i = 0; i < total; ++i) {
+                auto [match, loss_value] = this->evaluate(
+                    const_input_type(data.subspan(i * input_size, input_size)),
+                    label[i]
+                );
+                total_loss += loss_value;
+                ++(match ? correct : wrong);
+            }
+            const data_type accuracy = correct * 100.0 / total;
+            std::println("accuracy: {}%, avg loss: {}", accuracy, total_loss / total);
+            return accuracy;
+        }
+
+        std::ostream& store(std::ostream& os) {
+            auto buffer = serialization_buffer_util::get_buffer();
+            this->parameter_layer->store(serialization_buffer_util::buffer_to_parameter(*buffer));
+            for (data_type p : *buffer) {
+                auto temp = std::bit_cast<std::array<char, sizeof(data_type)>>(p);
+                os.write(temp.data(), temp.size());
+            }
+            return os;
+        }
+
+        std::istream& load(std::istream& is) {
+            auto buffer = serialization_buffer_util::get_buffer();
+            for (data_type& p : *buffer) {
+                std::array<char, sizeof(data_type)> temp = {};
+                is.read(temp.data(), temp.size());
+                p = std::bit_cast<data_type>(temp);
+            }
+            this->parameter_layer->load(serialization_buffer_util::buffer_to_parameter(*buffer));
+            return is;
+        }
+
+    private:
+        struct delegate_lazy_maker {
+            layer_type* parameter;
+            storage_type* storage;
+            operator delegate_type() const noexcept { return this->parameter->delegate(*(this->storage)); }
+        };
+
+        std::unique_ptr<layer_type> parameter_layer = std::make_unique_for_overwrite<layer_type>();
+        std::unique_ptr<storage_type> core_layer = std::make_unique_for_overwrite<storage_type>();
+        std::unique_ptr<delegate_type> core_delegate =
+            std::make_unique<delegate_type>(delegate_lazy_maker(this->parameter_layer.get(), this->core_layer.get()));
+    };
+
+    template<std::size_t INPUT_SIZE, std::size_t OUTPUT_SIZE>
+        requires (INPUT_SIZE >= 16) && (16 >= OUTPUT_SIZE)
+    using default_deployment_network = deployment_network<INPUT_SIZE, OUTPUT_SIZE, 16, 2>;
 
 } // namespace mylib
 
