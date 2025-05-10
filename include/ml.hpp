@@ -209,7 +209,7 @@ namespace mylib {
             template<typename Gen>
             void init(Gen& gen) noexcept { this->layer->init(gen); }
 
-            void calculate(/* out */ output_type output, const_input_type input) const noexcept {
+            void forward(/* out */ output_type output, const_input_type input) const noexcept {
                 fixed_layer& layer = *(this->layer);
                 weights_type weights = layer.weights();
                 biases_type biases = layer.biases();
@@ -225,7 +225,7 @@ namespace mylib {
                 }
             }
 
-            void back_propagate(
+            void backward(
                 /* out */ input_type prev_gradient,
                 const_input_type input,
                 const_output_type output,
@@ -437,19 +437,19 @@ namespace mylib {
             template<typename Gen>
             void init(Gen& gen) noexcept { this->layer->init(gen); }
 
-            void calculate(/* out */ output_type output, const_input_type input) const noexcept {
-                this->prev_layer_delegate.calculate(this->activation, input);
-                this->next_layer_delegate.calculate(output, this->activation);
+            void forward(/* out */ output_type output, const_input_type input) const noexcept {
+                this->prev_layer_delegate.forward(this->activation, input);
+                this->next_layer_delegate.forward(output, this->activation);
             }
 
-            void back_propagate(
+            void backward(
                 /* out */ input_type prev_gradient,
                 const_input_type input,
                 const_output_type output,
                 const_output_type next_gradient) noexcept {
                 std::ranges::fill(this->mid_gradient, 0);
-                this->next_layer_delegate.back_propagate(this->mid_gradient, this->activation, output, next_gradient);
-                this->prev_layer_delegate.back_propagate(prev_gradient, input, this->activation, this->mid_gradient);
+                this->next_layer_delegate.backward(this->mid_gradient, this->activation, output, next_gradient);
+                this->prev_layer_delegate.backward(prev_gradient, input, this->activation, this->mid_gradient);
             }
 
             void do_update() noexcept {
@@ -601,13 +601,13 @@ namespace mylib {
             template<typename Gen>
             constexpr void init(Gen& gen) const noexcept { /* noop */ }
 
-            void calculate(/* out */ output_type output, const_input_type input) const noexcept {
+            void forward(/* out */ output_type output, const_input_type input) const noexcept {
                 std::ranges::transform(input, this->buffer.begin(), [](data_type x) static noexcept { return std::exp(x); });
                 const data_type sum = std::ranges::fold_left(this->buffer, 0.0, std::plus<>{});
                 std::ranges::transform(this->buffer, output.begin(), [sum](data_type x) noexcept { return x / sum; });
             }
 
-            void back_propagate(
+            void backward(
                 /* out */ input_type prev_gradient,
                 const_input_type input,
                 const_output_type output,
@@ -764,7 +764,7 @@ namespace mylib {
         }
 
         void predict(/* out */ output_type output, const_input_type input) const noexcept {
-            this->core_delegate->calculate(output, input);
+            this->core_delegate->forward(output, input);
         }
 
         inline static std::array<data_type, input_size> discard = {};
@@ -783,11 +783,11 @@ namespace mylib {
             auto do_train = [](auto&& zip_ref) static noexcept {
                 auto&& [data, label, delegate, loss_result] = zip_ref;
                 std::array<data_type, output_size> output = {};
-                delegate.calculate(output, data);
+                delegate.forward(output, data);
                 loss_result = loss(output, label);
                 std::array<data_type, output_size> gradient = {};
                 loss_derivative(gradient, output, label);
-                delegate.back_propagate(discard, data, output, gradient);
+                delegate.backward(discard, data, output, gradient);
             };
             std::for_each(
                 // disable parallel for clang
@@ -838,7 +838,7 @@ namespace mylib {
         
         evaluate_result evaluate(const_input_type data, label_type label) const noexcept {
             std::array<data_type, output_size> output = {};
-            this->core_delegate->calculate(output, data);
+            this->core_delegate->forward(output, data);
             auto i = std::ranges::max_element(output);
             return { (i - output.begin()) == label, loss(output, label) };
         }
