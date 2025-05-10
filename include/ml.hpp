@@ -91,23 +91,7 @@ namespace mylib {
 
     template<typename Config>
     concept layer_config = mylib::basic_config<Config>
-        && mylib::activation<typename Config::activation_function_type>
-        && std::convertible_to<decltype(Config::learning_rate), typename Config::data_type>;
-
-    template<std::size_t INPUT_SIZE, std::size_t OUTPUT_SIZE>
-    struct default_layer_config
-    {
-        using data_type = double;
-        using activation_function_type = ReLU<data_type>;
-        constexpr static data_type learning_rate = 0.01;
-        constexpr static std::size_t input_size = INPUT_SIZE;
-        constexpr static std::size_t output_size = OUTPUT_SIZE;
-    };
-
-    template<std::size_t SIZE>
-    using default_hidden_layer_config = default_layer_config<SIZE, SIZE>;
-
-    static_assert(layer_config<default_hidden_layer_config<16>>);
+        && mylib::activation<typename Config::activation_function_type>;
 
     template<typename Layer>
     using requirement_t = typename Layer::requirement_type;
@@ -132,7 +116,6 @@ namespace mylib {
         constexpr static std::size_t output_size = config_type::output_size;
         constexpr static std::size_t weight_size = input_size * output_size;
         constexpr static std::size_t bias_size = output_size;
-        constexpr static data_type learning_rate = config_type::learning_rate;
 
         using extents_type = std::extents<std::size_t, output_size, input_size>;
         using weights_type = std::mdspan<data_type, extents_type>;
@@ -241,21 +224,22 @@ namespace mylib {
                     const data_type gradient = next_gradient[i] * layer.activation_function().derivative(this->mid_result[i]);
                     for (std::size_t j = 0; j < input_size; ++j) {
                         prev_gradient[j] += weights[i, j] * gradient;
-                        this->weights_step[i, j] -= learning_rate * gradient * input[j];
+                        // TODO: use dynamic learning rate
+                        this->weights_step[i, j] -= gradient * input[j];
                     }
-                    this->biases_step[i] -= learning_rate * gradient;
+                    this->biases_step[i] -= gradient;
                 }
             }
 
-            void do_update() noexcept {
+            void do_update(data_type learning_rate) noexcept {
                 fixed_layer& layer = *(this->layer);
                 auto weights = layer.weights();
                 auto biases = layer.biases();
                 for (std::size_t i = 0; i < output_size; ++i) {
                     for (std::size_t j = 0; j < input_size; ++j) {
-                        weights[i, j] += this->weights_step[i, j];
+                        weights[i, j] += learning_rate * this->weights_step[i, j];
                     }
-                    biases[i] += this->biases_step[i];
+                    biases[i] += learning_rate * this->biases_step[i];
                 }
             }
 
@@ -452,9 +436,9 @@ namespace mylib {
                 this->prev_layer_delegate.backward(prev_gradient, input, this->activation, this->mid_gradient);
             }
 
-            void do_update() noexcept {
-                this->prev_layer_delegate.do_update();
-                this->next_layer_delegate.do_update();
+            void do_update(data_type learning_rate) noexcept {
+                this->prev_layer_delegate.do_update(learning_rate);
+                this->next_layer_delegate.do_update(learning_rate);
             }
 
         private:
@@ -622,7 +606,7 @@ namespace mylib {
                 }
             }
 
-            constexpr void do_update() const noexcept { /* noop */ }
+            constexpr void do_update(data_type learning_rate) const noexcept { /* noop */ }
 
         private:
             friend softmax_layer;
@@ -643,8 +627,7 @@ namespace mylib {
         std::size_t HIDDEN_SIZE, std::size_t HIDDEN_COUNT,
         std::size_t TRAIN_BATCH,
         std::floating_point DataType = double,
-        mylib::activation ActivationFunc = leaky_ReLU<DataType>,
-        DataType LEARNING_RATE = 0.005
+        mylib::activation ActivationFunc = leaky_ReLU<DataType>
     >
         requires (INPUT_SIZE >= HIDDEN_SIZE) && (HIDDEN_SIZE >= OUTPUT_SIZE) && (HIDDEN_COUNT >= 2)
     class neural_network
@@ -657,7 +640,6 @@ namespace mylib {
         constexpr static std::size_t hidden_size = HIDDEN_SIZE;
         constexpr static std::size_t hidden_count = HIDDEN_COUNT;
         constexpr static std::size_t train_batch = TRAIN_BATCH;
-        constexpr static data_type learning_rate = LEARNING_RATE;
         using input_type = std::span<data_type, input_size>;
         using const_input_type = std::span<const data_type, input_size>;
         using output_type = std::span<data_type, output_size>;
@@ -676,7 +658,6 @@ namespace mylib {
             using activation_function_type = typename neural_network::activation_funcion_type;
             constexpr static std::size_t input_size = neural_network::input_size;
             constexpr static std::size_t output_size = neural_network::hidden_size;
-            constexpr static data_type learning_rate = neural_network::learning_rate;
         };
 
         struct output_layer_config {
@@ -684,7 +665,6 @@ namespace mylib {
             using activation_function_type = typename neural_network::activation_funcion_type;
             constexpr static std::size_t input_size = neural_network::hidden_size;
             constexpr static std::size_t output_size = neural_network::output_size;
-            constexpr static data_type learning_rate = neural_network::learning_rate;
         };
 
         struct hidden_layer_config {
@@ -692,7 +672,6 @@ namespace mylib {
             using activation_function_type = typename neural_network::activation_funcion_type;
             constexpr static std::size_t input_size = neural_network::hidden_size;
             constexpr static std::size_t output_size = neural_network::hidden_size;
-            constexpr static data_type learning_rate = neural_network::learning_rate;
         };
 
     public:
@@ -769,7 +748,7 @@ namespace mylib {
 
         inline static std::array<data_type, input_size> discard = {};
 
-        data_type fit(const_batch_input_type data, batch_label_type label) noexcept {
+        data_type fit(const_batch_input_type data, batch_label_type label, data_type learning_rate) noexcept {
             // prepare batches
             std::array<const_input_type, train_batch> data_batch =
                 [&data]<std::size_t... Is>(std::index_sequence<Is...>) noexcept {
@@ -814,19 +793,20 @@ namespace mylib {
                     }
                 }), ...);
             }(std::make_index_sequence<train_batch>{});
-            this->core_delegate->do_update();
+            this->core_delegate->do_update(learning_rate);
             // return average loss in this batch
             return std::ranges::fold_left(total_loss, 0.0, std::plus<>{}) / train_batch;
         }
 
-        void fit_batch(std::span<data_type> data, std::span<label_type> label) {
+        void fit_batch(std::span<data_type> data, std::span<label_type> label, data_type learning_rate) {
             check_fit_batch(data, label);
             constexpr std::size_t data_batch_size = train_batch * input_size;
             const std::size_t total_batch = label.size() / train_batch;
             for (std::size_t i = 0; i < total_batch; ++i) {
                 [[maybe_unused]] data_type loss_avg = this->fit(
                     const_batch_input_type(data.subspan(i * data_batch_size, data_batch_size)),
-                    batch_label_type(label.subspan(i * train_batch, train_batch))
+                    batch_label_type(label.subspan(i * train_batch, train_batch)),
+                    learning_rate
                 );
             }
         }

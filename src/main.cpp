@@ -119,10 +119,10 @@ int main(int argc, char** argv) {
     std::println("{}", argv[0]);
 
     using namespace std::literals;
-    constexpr auto trd_file = "train-images.idx3-ubyte";
-    constexpr auto trl_file = "train-labels.idx1-ubyte";
-    constexpr auto ted_file = "t10k-images.idx3-ubyte";
-    constexpr auto tel_file = "t10k-labels.idx1-ubyte";
+    constexpr auto trd_file = "testfiles/train-images.idx3-ubyte";
+    constexpr auto trl_file = "testfiles/train-labels.idx1-ubyte";
+    constexpr auto ted_file = "testfiles/t10k-images.idx3-ubyte";
+    constexpr auto tel_file = "testfiles/t10k-labels.idx1-ubyte";
 
     auto train_data = read_data(trd_file);
     auto train_label = read_labels(trl_file);
@@ -164,11 +164,13 @@ int main(int argc, char** argv) {
     if (helper.size() != trl.size()) {
         return 114514;
     }
-    for (auto _ : std::views::iota(0, 100)) {
+    for (double learning_rate = 0.005; auto _ : std::views::iota(0, 100)) {
         std::ranges::shuffle(z, gen);
-        network.fit_batch(trd, trl);
+        network.fit_batch(trd, trl, learning_rate);
         auto accuracy = network.evaluate_batch(ted, tel);
-        if (accuracy > 95.5) break;
+        if (accuracy > 90.0 && learning_rate > 0.0025) learning_rate = 0.0025;
+        if (accuracy > 95.0 && learning_rate > 0.001) learning_rate = 0.001;
+        if (accuracy > 96.0) break;
     }
 
     std::ofstream file("network.bin", std::ios::binary | std::ios::out);
