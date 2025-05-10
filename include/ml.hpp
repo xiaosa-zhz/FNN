@@ -1,7 +1,7 @@
 #ifndef MYLIB_MACHINE_LEARNING_H
 #define MYLIB_MACHINE_LEARNING_H 1
 
-// FNN
+// A FNN implementation in C++
 
 #include <concepts>
 #include <cstdint>
@@ -865,8 +865,8 @@ namespace mylib {
         std::ostream& store(std::ostream& os) {
             auto buffer = get_buffer();
             this->parameter_layer->store(buffer_to_parameter(*buffer));
-            for (double p : *buffer) {
-                auto temp = std::bit_cast<std::array<char, sizeof(double)>>(p);
+            for (data_type p : *buffer) {
+                auto temp = std::bit_cast<std::array<char, sizeof(data_type)>>(p);
                 os.write(temp.data(), temp.size());
             }
             return os;
@@ -874,10 +874,10 @@ namespace mylib {
 
         std::istream& load(std::istream& is) {
             auto buffer = get_buffer();
-            for (double& p : *buffer) {
-                std::array<char, sizeof(double)> temp = {};
+            for (data_type& p : *buffer) {
+                std::array<char, sizeof(data_type)> temp = {};
                 is.read(temp.data(), temp.size());
-                p = std::bit_cast<double>(temp);
+                p = std::bit_cast<data_type>(temp);
             }
             this->parameter_layer->load(buffer_to_parameter(*buffer));
             return is;
