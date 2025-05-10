@@ -1,6 +1,6 @@
 # Xmake cache
 .xmake/
-.vscode/.cache
+.vscode/
 build/
 testfiles/
 
