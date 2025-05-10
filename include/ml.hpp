@@ -224,7 +224,6 @@ namespace mylib {
                     const data_type gradient = next_gradient[i] * layer.activation_function().derivative(this->mid_result[i]);
                     for (std::size_t j = 0; j < input_size; ++j) {
                         prev_gradient[j] += weights[i, j] * gradient;
-                        // TODO: use dynamic learning rate
                         this->weights_step[i, j] -= gradient * input[j];
                     }
                     this->biases_step[i] -= gradient;
@@ -897,6 +896,8 @@ namespace mylib {
     template<std::size_t INPUT_SIZE, std::size_t OUTPUT_SIZE>
         requires (INPUT_SIZE >= 16) && (16 >= OUTPUT_SIZE)
     using default_network = neural_network<INPUT_SIZE, OUTPUT_SIZE, 16, 2, 10>;
+
+    // TODO: add deployment only network type
 
 } // namespace mylib
 
