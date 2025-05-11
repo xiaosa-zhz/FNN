@@ -165,7 +165,9 @@ int main(int argc, char** argv) {
     for (double learning_rate = 0.005; auto _ : std::views::iota(0, 100)) {
         std::ranges::shuffle(z, gen);
         network.fit_batch(trd, trl, learning_rate);
-        auto accuracy = network.evaluate_batch(ted, tel);
+        auto [correct, wrong, loss] = network.evaluate_batch(ted, tel);
+        const auto accuracy = correct * 100.0 / (correct + wrong);
+        std::println("accuracy: {}%, avg loss: {}", accuracy, loss);
         if (accuracy > 90.0 && learning_rate > 0.0025) learning_rate = 0.0025;
         if (accuracy > 95.0 && learning_rate > 0.001) learning_rate = 0.001;
         if (accuracy > 96.0) break;

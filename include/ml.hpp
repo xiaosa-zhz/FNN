@@ -23,7 +23,6 @@
 #endif
 
 #include <cmath>
-#include <print>
 
 namespace mylib {
 
@@ -768,6 +767,21 @@ namespace mylib {
         }
     };
 
+    template<typename DataType>
+    struct evaluate_result {
+        using data_type = DataType;
+        bool match;
+        data_type loss_value;
+    };
+
+    template<typename DataType>
+    struct batch_evaluate_result {
+        using data_type = DataType;
+        std::size_t correct;
+        std::size_t wrong;
+        data_type loss_value;
+    };
+
     template<std::size_t INPUT_SIZE, std::size_t OUTPUT_SIZE,
         std::size_t HIDDEN_SIZE, std::size_t HIDDEN_COUNT,
         std::size_t TRAIN_BATCH,
@@ -927,20 +941,15 @@ namespace mylib {
                 );
             }
         }
-
-        struct evaluate_result {
-            bool match;
-            data_type loss_value;
-        };
         
-        evaluate_result evaluate(const_input_type data, label_type label) const noexcept {
+        evaluate_result<data_type> evaluate(const_input_type data, label_type label) const noexcept {
             std::array<data_type, output_size> output = {};
             this->core_delegate->forward(output, data);
             auto i = std::ranges::max_element(output);
             return { (i - output.begin()) == label, loss_type::loss(output, label) };
         }
 
-        data_type evaluate_batch(std::span<data_type> data, std::span<label_type> label) const {
+        batch_evaluate_result<data_type> evaluate_batch(std::span<data_type> data, std::span<label_type> label) const {
             check_evaluate_batch(data, label);
             const std::size_t total = label.size();
             std::size_t correct = 0;
@@ -954,9 +963,7 @@ namespace mylib {
                 total_loss += loss_value;
                 ++(match ? correct : wrong);
             }
-            const data_type accuracy = correct * 100.0 / total;
-            std::println("accuracy: {}%, avg loss: {}", accuracy, total_loss / total);
-            return accuracy;
+            return { correct, wrong, total_loss / total };
         }
 
         std::ostream& store(std::ostream& os) {
@@ -1087,20 +1094,15 @@ namespace mylib {
             this->load(is);
         }
         explicit deployment_network(uninitialize_tag_t) {}
-
-        struct evaluate_result {
-            bool match;
-            data_type loss_value;
-        };
         
-        evaluate_result evaluate(const_input_type data, label_type label) const noexcept {
+        evaluate_result<data_type> evaluate(const_input_type data, label_type label) const noexcept {
             std::array<data_type, output_size> output = {};
             this->core_delegate->forward(output, data);
             auto i = std::ranges::max_element(output);
             return { (i - output.begin()) == label, loss_type::loss(output, label) };
         }
 
-        data_type evaluate_batch(std::span<data_type> data, std::span<label_type> label) const {
+        batch_evaluate_result<data_type> evaluate_batch(std::span<data_type> data, std::span<label_type> label) const {
             check_evaluate_batch(data, label);
             const std::size_t total = label.size();
             std::size_t correct = 0;
@@ -1114,9 +1116,7 @@ namespace mylib {
                 total_loss += loss_value;
                 ++(match ? correct : wrong);
             }
-            const data_type accuracy = correct * 100.0 / total;
-            std::println("accuracy: {}%, avg loss: {}", accuracy, total_loss / total);
-            return accuracy;
+            return { correct, wrong, total_loss / total };
         }
 
         std::ostream& store(std::ostream& os) {
